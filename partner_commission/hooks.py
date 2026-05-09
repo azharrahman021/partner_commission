@@ -1,7 +1,7 @@
 app_name = "partner_commission"
 app_title = "Partner Commission"
 app_publisher = "azhar"
-app_description = "sales commission"
+app_description = "partner commission"
 app_email = "azharrahman021@gmail.com"
 app_license = "mit"
 

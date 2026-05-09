@@ -3,7 +3,7 @@ name = "partner_commission"
 authors = [
     { name = "azhar", email = "azharrahman021@gmail.com"}
 ]
-description = "sales commission"
+description = "partner commission"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
