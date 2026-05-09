@@ -1,9 +1,9 @@
 [project]
 name = "partner_commission"
 authors = [
-    { name = "Azhar", email = "azharrahman021@gmail.com"}
+    { name = "azhar", email = "azharrahman021@gmail.com"}
 ]
-description = "sales commission management"
+description = "sales commission"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
