@@ -1,9 +1,56 @@
 app_name = "partner_commission"
 app_title = "Partner Commission"
-app_publisher = "azhar"
-app_description = "partner commission"
-app_email = "azharrahman021@gmail.com"
-app_license = "mit"
+app_publisher = "Your Company"
+app_description = "Partner commission ledger based on realized invoice collections"
+app_email = "your@email.com"
+app_license = "MIT"
+
+doc_events = {
+    "Payment Entry": {
+        "on_submit": "partner_commission.commission.sync_from_payment_entry",
+        "on_cancel": "partner_commission.commission.sync_from_payment_entry",
+    },
+    "Journal Entry": {
+        "on_submit": "partner_commission.commission.sync_from_journal_entry",
+        "on_cancel": "partner_commission.commission.sync_from_journal_entry",
+    },
+    "Sales Invoice": {
+        "on_submit": "partner_commission.commission.sync_from_sales_invoice",
+        "on_cancel": "partner_commission.commission.sync_from_sales_invoice",
+    },
+}
+
+scheduler_events = {
+    "hourly": [
+        "partner_commission.commission.sync_recent_commissions"
+    ]
+}
+
+fixtures = [
+    "Client Script",
+    {
+        "dt": "DocType",
+        "filters": [["name", "=", "Sales Commission Ledger"]],
+    },
+    {
+        "dt": "Custom Field",
+        "filters": [["dt", "in", [
+            "Sales Commission Ledger",
+            "Sales Invoice",
+            "Payment Entry",
+            "Journal Entry",
+        ]]],
+    },
+    {
+        "dt": "Property Setter",
+        "filters": [["doc_type", "in", [
+            "Sales Commission Ledger",
+            "Sales Invoice",
+            "Payment Entry",
+            "Journal Entry",
+        ]]],
+    },
+]
 
 # Apps
 # ------------------
