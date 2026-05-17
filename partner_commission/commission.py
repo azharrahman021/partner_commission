@@ -3,7 +3,9 @@ from frappe.utils import add_to_date, flt, now_datetime
 
 
 def sync_from_payment_entry(doc, method=None):
+    frappe.log_error(f"Hook fired for Payment Entry {doc.name}", "Partner Commission Debug")
     invoices = get_invoices_from_payment_entry(doc)
+    frappe.log_error(f"Invoices found: {list(invoices)}", "Partner Commission Debug")
     sync_invoices(invoices)
 
 
@@ -108,12 +110,15 @@ def rebuild_invoice_commission(invoice_name):
     delete_ledgers_for_invoice(invoice.name)
 
     payment_rows = get_payment_realizations(invoice.name)
+    payment_rows.extend(get_sales_invoice_payment_realizations(invoice))
+    payment_deductions = get_payment_entry_deductions(invoice.name)
     journal_write_off = get_journal_write_off_amount(invoice.name)
+    total_write_off = payment_deductions + journal_write_off
+
     credit_note_total = get_credit_note_total(invoice.name)
 
     total_paid = sum(flt(row["allocated_amount"]) for row in payment_rows)
-
-    total_realized_before_credit_note = total_paid - journal_write_off
+    total_realized_before_credit_note = total_paid - total_write_off
     actual_realization = total_realized_before_credit_note - credit_note_total
 
     if actual_realization <= 0:
@@ -131,8 +136,9 @@ def rebuild_invoice_commission(invoice_name):
         gross_invoice_total=gross_invoice_total,
         net_invoice_total=net_invoice_total,
         allocated_amount=total_paid,
-        write_off_allocated=journal_write_off,
+        write_off_allocated=total_write_off,
         credit_note_amount=credit_note_total,
+        actual_realization=actual_realization,
         commission_base=commission_base,
         commission_rate=commission_rate,
         commission_amount=commission_amount,
@@ -160,8 +166,7 @@ def get_payment_realizations(invoice_name):
             pe.name AS payment_entry,
             pe.posting_date,
             pe.company,
-            per.allocated_amount,
-            pe.write_off_amount
+            per.allocated_amount
         FROM
             `tabPayment Entry Reference` per
         INNER JOIN
@@ -176,6 +181,49 @@ def get_payment_realizations(invoice_name):
         """,
         invoice_name,
         as_dict=True,
+    )
+
+
+def get_sales_invoice_payment_realizations(invoice):
+    if not invoice.get("payments"):
+        return []
+
+    return [
+        {
+            "payment_entry": None,
+            "posting_date": invoice.posting_date,
+            "company": invoice.company,
+            "allocated_amount": flt(payment.amount),
+        }
+        for payment in invoice.get("payments", [])
+        if flt(payment.amount) > 0
+    ]
+
+
+def get_payment_entry_deductions(invoice_name):
+    return flt(
+        frappe.db.sql(
+            """
+            SELECT
+                SUM(ABS(IFNULL(ped.amount, 0)))
+            FROM
+                `tabPayment Entry Deduction` ped
+            INNER JOIN
+                `tabPayment Entry` pe
+            ON
+                pe.name = ped.parent
+            INNER JOIN
+                `tabPayment Entry Reference` per
+            ON
+                per.parent = pe.name
+            WHERE
+                pe.docstatus = 1
+                AND per.reference_doctype = 'Sales Invoice'
+                AND per.reference_name = %s
+            """,
+            invoice_name,
+        )[0][0]
+        or 0
     )
 
 
@@ -224,31 +272,38 @@ def create_invoice_summary_ledger(
     allocated_amount,
     write_off_allocated,
     credit_note_amount,
+    actual_realization,
     commission_base,
     commission_rate,
     commission_amount,
 ):
     ledger = frappe.new_doc("Sales Commission Ledger")
 
-    ledger.sales_partner = invoice.sales_partner
-    ledger.sales_invoice = invoice.name
-    ledger.posting_date = invoice.posting_date
-    ledger.company = invoice.company
+    set_if_field_exists(ledger, "sales_partner", invoice.sales_partner)
+    set_sales_person_if_valid(ledger, invoice.sales_partner)
+    set_if_field_exists(ledger, "sales_invoice", invoice.name)
+    set_if_field_exists(ledger, "posting_date", invoice.posting_date)
+    set_if_field_exists(ledger, "company", invoice.company)
 
-    ledger.gross_invoice_total = gross_invoice_total
-    ledger.net_invoice_total = net_invoice_total
-    ledger.allocated_amount = allocated_amount
-    ledger.write_off_allocated = write_off_allocated
-    ledger.credit_note_amount = credit_note_amount
-    ledger.commission_base = commission_base
-    ledger.commission_rate = commission_rate
-    ledger.commission_amount = commission_amount
+    set_if_field_exists(ledger, "gross_invoice_total", gross_invoice_total)
+    set_if_field_exists(ledger, "net_invoice_total", net_invoice_total)
+    set_if_field_exists(ledger, "allocated_amount", allocated_amount)
+    set_if_field_exists(ledger, "write_off_allocated", write_off_allocated)
+    set_if_field_exists(ledger, "credit_note_amount", credit_note_amount)
+    set_if_field_exists(ledger, "commission_base", commission_base)
+    set_if_field_exists(ledger, "net_realization", actual_realization)
+    set_if_field_exists(ledger, "commission_rate", commission_rate)
+    set_if_field_exists(ledger, "commission_amount", commission_amount)
+    set_if_field_exists(ledger, "status", "Unpaid")
 
     set_if_field_exists(ledger, "reference_doctype", "Sales Invoice")
     set_if_field_exists(ledger, "reference_name", invoice.name)
     set_if_field_exists(ledger, "sync_key", f"Sales Invoice::{invoice.name}")
+    set_if_field_exists(ledger, "custom_reference_doctype", "Sales Invoice")
+    set_if_field_exists(ledger, "custom_reference_name", invoice.name)
+    set_if_field_exists(ledger, "custom_sync_key", f"Sales Invoice::{invoice.name}")
 
-    ledger.insert(ignore_permissions=True)
+    ledger.insert(ignore_permissions=True, ignore_mandatory=True)
 
 
 def delete_ledgers_for_invoice(invoice_name):
@@ -291,3 +346,10 @@ def set_if_field_exists(doc, fieldname, value):
     if doc.meta.has_field(fieldname):
         doc.set(fieldname, value)
 
+
+def set_sales_person_if_valid(doc, sales_partner):
+    if not doc.meta.has_field("sales_person") or not sales_partner:
+        return
+
+    if frappe.db.exists("Sales Person", sales_partner):
+        doc.sales_person = sales_partner
