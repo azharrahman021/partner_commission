@@ -861,6 +861,6 @@
   "property": "field_order",
   "property_type": "Data",
   "row_name": null,
-  "value": "[\"sales_person\", \"posting_date\", \"sales_invoice\", \"payment_entry\", \"net_realization\", \"commission_rate\", \"commission_amount\", \"status\", \"company\", \"custom_journal_entry\", \"custom_reference_doctype\", \"custom_reference_name\", \"custom_sync_key\"]"
+  "value": "[\"sales_partner\", \"sales_person\", \"commission_type\", \"posting_date\", \"sales_invoice\", \"payment_entry\", \"net_realization\", \"commission_rate\", \"commission_amount\", \"status\", \"company\", \"custom_journal_entry\", \"custom_reference_doctype\", \"custom_reference_name\", \"custom_sync_key\"]"
  }
 ]
