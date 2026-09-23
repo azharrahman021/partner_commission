@@ -1,6 +1,7 @@
+from collections import Counter
+
 import frappe
 from frappe.utils import add_days, add_to_date, date_diff, flt, getdate, now_datetime
-
 
 FIXED_COMMISSION_RATE = 5
 DEFAULT_OUTSTANDING_THRESHOLD = 0
@@ -668,12 +669,17 @@ def get_invoice_summary_ledger_values(
 
 
 def insert_commission_ledger(values):
+    ledger = make_commission_ledger(values)
+    ledger.insert(ignore_permissions=True, ignore_mandatory=True)
+
+
+def make_commission_ledger(values):
     ledger = frappe.new_doc("Sales Commission Ledger")
 
     for fieldname, value in values.items():
         set_if_field_exists(ledger, fieldname, value)
 
-    ledger.insert(ignore_permissions=True, ignore_mandatory=True)
+    return ledger
 
 
 def apply_recalculated_commission_ledgers(invoice, recalculated_ledgers):
@@ -686,7 +692,7 @@ def apply_recalculated_commission_ledgers(invoice, recalculated_ledgers):
         target_totals[key] = target_totals.get(key, 0) + flt(values.get("commission_amount"))
         target_metadata.setdefault(key, values)
 
-    delete_unpaid_ledgers_for_invoice(invoice.name)
+    expected_ledgers = []
 
     for key in set(target_totals) | set(paid_totals):
         target_amount = flt(target_totals.get(key))
@@ -705,7 +711,7 @@ def apply_recalculated_commission_ledgers(invoice, recalculated_ledgers):
             ):
                 values["sync_key"] = get_adjustment_sync_key(values, "ineligible")
                 values["custom_sync_key"] = values["sync_key"]
-                insert_commission_ledger(values)
+                expected_ledgers.append(values)
             continue
 
         if not values:
@@ -740,7 +746,54 @@ def apply_recalculated_commission_ledgers(invoice, recalculated_ledgers):
         if delta_amount < 0 and not values.get("ineligibility_reason"):
             values["ineligibility_reason"] = "Paid commission adjusted after return or recalculation."
 
+        expected_ledgers.append(values)
+
+    # Recalculate every time: eligibility can change without modifying this invoice.
+    # Avoid delete_doc's background link cleanup when the persisted result is unchanged.
+    if unpaid_commission_ledgers_match(invoice.name, expected_ledgers):
+        return
+
+    delete_unpaid_ledgers_for_invoice(invoice.name)
+    for values in expected_ledgers:
         insert_commission_ledger(values)
+
+
+def unpaid_commission_ledgers_match(invoice_name, expected_ledgers):
+    existing = frappe.get_all(
+        "Sales Commission Ledger",
+        filters={"sales_invoice": invoice_name, "status": ["!=", "Paid"]},
+        fields=["*"],
+    )
+    if len(existing) != len(expected_ledgers):
+        return False
+    if not expected_ledgers:
+        return True
+
+    # Use the same defaults and field filtering as an insert. Compare all stored
+    # business fields, including zero-valued ineligible rows and adjustment metadata.
+    documents = [make_commission_ledger(values) for values in expected_ledgers]
+    expected = [doc.get_valid_dict(ignore_virtual=True) for doc in documents]
+    ignored = {"name", "owner", "creation", "modified", "modified_by", "idx"}
+    fields = sorted(set().union(*(row.keys() for row in expected)) - ignored)
+    meta = documents[0].meta
+
+    def signature(row):
+        result = []
+        for fieldname in fields:
+            value = row.get(fieldname)
+            field = meta.get_field(fieldname)
+            fieldtype = field.fieldtype if field else None
+            if fieldtype in {"Currency", "Float", "Percent", "Int", "Check", "Long Int"}:
+                value = flt(value)
+            elif fieldtype == "Date":
+                value = str(getdate(value)) if value else ""
+            elif value is None:
+                value = ""
+            result.append(value)
+        return tuple(result)
+
+    # A multiset catches duplicate rows as well as missing/stale parties.
+    return Counter(map(signature, existing)) == Counter(map(signature, expected))
 
 
 def get_paid_commission_totals(invoice_name):
@@ -805,7 +858,7 @@ def get_delta_commission_base(delta_amount, commission_rate):
 
 
 def get_adjustment_sync_key(values, suffix):
-    return "Sales Invoice::{0}::{1}::{2}::{3}".format(
+    return "Sales Invoice::{}::{}::{}::{}".format(
         values.get("sales_invoice"),
         values.get("commission_type"),
         values.get("sales_person") or "partner",
