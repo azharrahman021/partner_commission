@@ -130,6 +130,18 @@ class TestCommissionReconciliation(unittest.TestCase):
 		self.deleted.assert_called_once_with("INV-1")
 		self.assertEqual(self.inserted[0]["commission_amount"], 50)
 
+	def test_sub_storage_precision_noise_does_not_rebuild(self):
+		self.rows = [self.stored()]
+		self.target["commission_amount"] = 50.000000000001
+		self.run_sync()
+		self.assert_no_writes()
+
+	def test_change_at_storage_precision_is_not_ignored(self):
+		self.rows = [self.stored()]
+		self.target["commission_amount"] = 50.000000001
+		self.run_sync()
+		self.deleted.assert_called_once()
+
 	def test_same_amount_changed_eligibility_metadata_is_rebuilt(self):
 		self.rows = [self.stored()]
 		self.rows[0]["ineligibility_reason"] = "Stale reason"

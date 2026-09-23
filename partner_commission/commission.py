@@ -1,4 +1,5 @@
 from collections import Counter
+from decimal import ROUND_HALF_UP, Decimal
 
 import frappe
 from frappe.utils import add_days, add_to_date, date_diff, flt, getdate, now_datetime
@@ -775,7 +776,11 @@ def unpaid_commission_ledgers_match(invoice_name, expected_ledgers):
 			value = row.get(fieldname)
 			field = meta.get_field(fieldname)
 			fieldtype = field.fieldtype if field else None
-			if fieldtype in {"Currency", "Float", "Percent", "Int", "Check", "Long Int"}:
+			if fieldtype in {"Currency", "Float", "Percent"}:
+				# Frappe stores float-like fields as DECIMAL(21, 9). Compare
+				# stored precision, not binary float noise from recalculation.
+				value = Decimal(str(value or 0)).quantize(Decimal("0.000000001"), rounding=ROUND_HALF_UP)
+			elif fieldtype in {"Int", "Check", "Long Int"}:
 				value = flt(value)
 			elif fieldtype == "Date":
 				value = str(getdate(value)) if value else ""
